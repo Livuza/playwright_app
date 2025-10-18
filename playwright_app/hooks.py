@@ -83,7 +83,7 @@ app_license = "mit"
 # ------------
 
 # before_install = "playwright_app.install.before_install"
-# after_install = "playwright_app.install.after_install"
+after_install = "playwright_app.install.after_install"
 
 # Uninstallation
 # ------------
