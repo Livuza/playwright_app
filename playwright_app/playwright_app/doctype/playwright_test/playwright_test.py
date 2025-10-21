@@ -38,7 +38,7 @@ def run_login(docname: str) -> str:
 			# Launch browser context
 			browser = p.chromium.launch_persistent_context(
 				user_data_dir=temp_dir,
-				headless=False,
+				headless=True,
 				args=[
 					"--no-sandbox",
 					"--disable-dev-shm-usage",

@@ -26,7 +26,7 @@ def after_install():
 def install_playwright():
     """Install Playwright via pip if not already installed."""
     try:
-        import playwright  # noqa
+        import playwright
         click.echo("Playwright already installed.")
     except ImportError:
         click.echo("Installing Playwright...")
