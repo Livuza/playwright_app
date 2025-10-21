@@ -1,104 +1,79 @@
-import os
-import sys
-import platform
-import subprocess
-import zipfile
-import shutil
-from pathlib import Path
-import requests
-import click
 import frappe
-
+import sys
+import subprocess
+import click
+import os
+from pathlib import Path
 
 def after_install():
-    """Main installation hook."""
-    click.echo("Installing Playwright and Chromium dependencies...")
+    """Main installation hook executed after the app is installed."""
+    click.echo("Starting Playwright and Chromium setup...")
 
     try:
-        install_playwright()
-        setup_chromium()
+        install_python_deps()
+        install_playwright_package()
+        install_playwright_browsers()
         click.echo("Playwright and Chromium setup completed successfully.")
+        
+        # Critical reminder for the system dependencies issue
+        click.secho(
+            "\n*** ATTENTION FOR CLOUD HOSTING ***\n"
+            "The browser binaries are installed, but the host system may still be "
+            "missing external dependencies (e.g., libx11-xcb1). If tests fail, "
+            "you MUST contact Frappe Cloud Support and ask them to run:\n"
+            "  $ sudo playwright install-deps\n",
+            fg="yellow",
+            bold=True
+        )
+
     except Exception as e:
         frappe.log_error(title="Playwright Setup Error", message=str(e))
         click.secho(f"Playwright setup failed: {e}", fg="red")
 
+def install_python_deps():
+    """Install Playwright and its Python dependencies."""
+    click.echo("Installing Playwright and dependencies...")
+    subprocess.check_call(["pip", "install", "playwright==1.55.0"])
 
-def install_playwright():
+    # Install system dependencies if available
+    deps = [
+        "libatk1.0-0", "libatk-bridge2.0-0", "libxkbcommon0",
+        "libatspi2.0-0", "libxcomposite1", "libxdamage1",
+        "libxfixes3", "libxrandr2", "libgbm1", "libasound2", "libx11-xcb1"
+    ]
+    subprocess.call(["apt-get", "update", "-y"])
+    subprocess.call(["apt-get", "install", "-y"] + deps, stderr=subprocess.DEVNULL)
+    click.echo("Python & system dependencies installed.")
+
+def get_bench_python_executable():
+    """Returns the path to the Python interpreter within the bench environment."""
+    # Get the root path of the bench environment
+    bench_path = frappe.utils.get_bench_path()
+    # Path is typically: [bench_path]/env/bin/python3
+    return Path(bench_path) / "env" / "bin" / "python3"
+
+
+def install_playwright_package():
     """Install Playwright via pip if not already installed."""
     try:
         import playwright
-        click.echo("Playwright already installed.")
+        click.echo("Playwright Python package already installed.")
     except ImportError:
-        click.echo("Installing Playwright...")
-        subprocess.check_call([sys.executable, "-m", "pip", "install", "playwright==1.55.0"])
+        click.echo("Installing Playwright Python package...")
+        # Use sys.executable as it points to the current environment's python
+        subprocess.check_call([sys.executable, "-m", "pip", "install", "playwright"])
 
-    # Try to run playwright install via Python API (safe for restricted environments)
+
+def install_playwright_browsers():
+    """Run the official 'playwright install' command using the bench's Python executable."""
+    bench_python = get_bench_python_executable()
+    
+    click.echo(f"Running official Playwright browser installation using: {bench_python}")
+    
     try:
-        from playwright.__main__ import main
-        main(["install", "chromium"])
-        click.echo("Chromium browser installed via Playwright.")
-    except Exception:
-        click.echo("Could not install Chromium via Playwright. Attempting manual download...")
-        setup_chromium()
-
-
-def setup_chromium():
-    """Find or download Chromium manually if not present."""
-    bench_path = frappe.utils.get_bench_path()
-    chromium_dir = os.path.join(bench_path, "chromium")
-    os.makedirs(chromium_dir, exist_ok=True)
-
-    exec_path = Path(chromium_dir) / "chrome-headless-shell"
-    if exec_path.exists():
-        click.echo(f"Chromium already exists at {exec_path}")
-        return
-
-    url = get_chromium_download_url()
-    zip_path = os.path.join(chromium_dir, "chromium.zip")
-
-    click.echo(f"Downloading Chromium from {url} ...")
-    headers = {"User-Agent": "Wget/1.21.1"}
-    with requests.get(url, stream=True, timeout=(10, 60), headers=headers) as r:
-        r.raise_for_status()
-        total = int(r.headers.get("content-length", 0))
-        with click.progressbar(length=total, label="Downloading Chromium") as bar, open(zip_path, "wb") as f:
-            for chunk in r.iter_content(chunk_size=65536):
-                f.write(chunk)
-                bar.update(len(chunk))
-
-    click.echo("Extracting Chromium...")
-    with zipfile.ZipFile(zip_path, "r") as zip_ref:
-        zip_ref.extractall(chromium_dir)
-    os.remove(zip_path)
-
-    # Locate and move executable
-    for root, _, files in os.walk(chromium_dir):
-        for file in files:
-            if "chrome-headless-shell" in file or "headless_shell" in file:
-                shutil.move(os.path.join(root, file), exec_path)
-                break
-
-    if not os.access(exec_path, os.X_OK):
-        os.chmod(exec_path, 0o755)
-
-    click.echo(f"Chromium ready at: {exec_path}")
-
-
-def get_chromium_download_url():
-    """Return platform-appropriate Chromium URL."""
-    base_url = "https://storage.googleapis.com/chrome-for-testing-public"
-    version = "133.0.6943.35"
-    system = platform.system().lower()
-    arch = platform.machine().lower()
-
-    if system == "linux":
-        return f"{base_url}/{version}/linux64/chrome-headless-shell-linux64.zip"
-    elif system == "darwin":
-        if arch == "arm64":
-            return f"{base_url}/{version}/mac-arm64/chrome-headless-shell-mac-arm64.zip"
-        else:
-            return f"{base_url}/{version}/mac-x64/chrome-headless-shell-mac-x64.zip"
-    elif system == "windows":
-        return f"{base_url}/{version}/win64/chrome-headless-shell-win64.zip"
-    else:
-        raise RuntimeError(f"Unsupported platform: {system}-{arch}")
+        # Command: /path/to/bench/env/bin/python3 -m playwright install
+        subprocess.check_call([str(bench_python), "-m", "playwright", "install"])
+        click.echo("Chromium and other browsers successfully installed.")
+    except subprocess.CalledProcessError as e:
+        click.echo(f"Error executing playwright install command: {e}", fg="red")
+        raise
