@@ -1,6 +1,7 @@
 {
  "actions": [],
  "allow_rename": 1,
+ "autoname": "format:TEST-{####}",
  "creation": "2025-10-18 10:37:42.778271",
  "doctype": "DocType",
  "engine": "InnoDB",
@@ -24,10 +25,11 @@
  "grid_page_length": 50,
  "index_web_pages_for_search": 1,
  "links": [],
- "modified": "2025-10-18 10:37:42.778271",
+ "modified": "2025-10-21 16:24:29.143127",
  "modified_by": "Administrator",
  "module": "Playwright App",
  "name": "Playwright Test",
+ "naming_rule": "Expression",
  "owner": "Administrator",
  "permissions": [
   {
