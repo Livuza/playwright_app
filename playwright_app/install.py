@@ -1,82 +1,116 @@
-import subprocess
-import sys
-import platform
 import os
+import platform
 import shutil
-import getpass
+import zipfile
+import tempfile
+import requests
 import frappe
-
-
-def run_command(cmd, description):
-	"""Helper to run a shell command with logging."""
-	frappe.logger().info(f"{description}...")
-	try:
-		subprocess.check_call(cmd)
-		frappe.logger().info(f"{description} completed successfully.")
-	except subprocess.CalledProcessError as e:
-		frappe.logger().error(f"Failed during {description}: {e}")
-		raise
-
+from pathlib import Path
+import click
+import subprocess
 
 def after_install():
-	"""Install Playwright and required system/browser dependencies safely."""
-	frappe.logger().info("Starting Playwright setup...")
+    """Install all Playwright dependencies and ensure Chromium is available."""
 
-	current_user = getpass.getuser()
-	frappe.logger().info(f"Detected current user: {current_user}")
+    try:
+        install_python_deps()
+        setup_chromium_for_playwright()
+        click.echo("Playwright environment ready.")
+    except Exception as e:
+        click.echo(f"Playwright setup failed: {e}")
+        frappe.log_error(f"Playwright setup failed: {e}")
 
-	# Install Playwright Python module
-	run_command(
-		[sys.executable, "-m", "pip", "install", "playwright==1.55.0"],
-		"Installing Playwright Python module"
-	)
 
-	# Install Linux dependencies (if applicable)
-	if platform.system().lower() == "linux":
-		deps = [
-			"libatk1.0-0",
-			"libatk-bridge2.0-0",
-			"libxkbcommon0",
-			"libatspi2.0-0",
-			"libxcomposite1",
-			"libxdamage1",
-			"libxfixes3",
-			"libxrandr2",
-			"libgbm1",
-			"libasound2",
-		]
-		if shutil.which("apt-get"):
-			try:
-				run_command(["apt-get", "update"], "Updating apt repository")
-				run_command(["apt-get", "install", "-y"] + deps, "Installing Playwright system dependencies")
-			except Exception as e:
-				frappe.logger().warning(f"Could not install system packages: {e}")
-				frappe.logger().warning("You may need to run manually: sudo playwright install-deps")
-		else:
-			frappe.logger().warning("apt-get not available — skipping system dependency installation.")
+def install_python_deps():
+    """Install Playwright and its Python dependencies."""
+    click.echo("Installing Playwright and dependencies...")
+    subprocess.check_call(["pip", "install", "playwright==1.55.0"])
 
-	# Install Playwright browsers for the active user
-	home_dir = os.path.expanduser(f"~{current_user}")
-	cache_dir = os.path.join(home_dir, ".cache", "ms-playwright")
-	os.makedirs(cache_dir, exist_ok=True)
+    # Install system dependencies if available
+    deps = [
+        "libatk1.0-0", "libatk-bridge2.0-0", "libxkbcommon0",
+        "libatspi2.0-0", "libxcomposite1", "libxdamage1",
+        "libxfixes3", "libxrandr2", "libgbm1", "libasound2"
+    ]
+    subprocess.call(["apt-get", "update", "-y"])
+    subprocess.call(["apt-get", "install", "-y"] + deps, stderr=subprocess.DEVNULL)
+    click.echo("Python & system dependencies installed.")
 
-	try:
-		run_command(
-			["sudo", "-u", current_user, "bash", "-c", "playwright install chromium"],
-			f"Installing Chromium for user '{current_user}'"
-		)
-	except Exception as e:
-		frappe.logger().warning(f"Running as '{current_user}' failed: {e}, retrying directly.")
-		run_command([sys.executable, "-m", "playwright", "install", "chromium"], "Installing Chromium directly")
 
-	# Validate Chromium binary path
-	expected_path = os.path.join(cache_dir, "chromium-1187", "chrome-linux", "chrome")
-	if os.path.exists(expected_path):
-		frappe.logger().info(f"Chromium installed successfully at {expected_path}")
-	else:
-		frappe.logger().warning(f"Chromium not found at {expected_path}")
-		frappe.logger().info(
-			f"Run manually as the active user:\n    playwright install chromium"
-		)
+def setup_chromium_for_playwright():
+    """Automatically download Chromium if not found."""
+    bench_path = frappe.utils.get_bench_path()
+    chromium_dir = os.path.join(bench_path, "chromium")
+    os.makedirs(chromium_dir, exist_ok=True)
 
-	frappe.logger().info("Playwright setup completed successfully.")
+    # Check if Chromium already exists
+    chromium_exec = find_chromium_executable(chromium_dir)
+    if chromium_exec and os.path.exists(chromium_exec):
+        click.echo(f"Chromium already present at: {chromium_exec}")
+        return chromium_exec
+
+    click.echo("Chromium not found, downloading...")
+    url = get_chromium_download_url()
+    zip_path = os.path.join(tempfile.gettempdir(), os.path.basename(url))
+
+    with requests.get(url, stream=True, headers={"User-Agent": "Wget/1.21.1"}) as r:
+        r.raise_for_status()
+        total = int(r.headers.get("content-length", 0))
+        bar = click.progressbar(length=total, label="Downloading Chromium")
+        with open(zip_path, "wb") as f:
+            for chunk in r.iter_content(chunk_size=65536):
+                f.write(chunk)
+                bar.update(len(chunk))
+
+    click.echo("Extracting Chromium...")
+    with zipfile.ZipFile(zip_path, "r") as zip_ref:
+        zip_ref.extractall(chromium_dir)
+    os.remove(zip_path)
+
+    # Ensure executable is available
+    exec_path = find_chromium_executable(chromium_dir)
+    if not exec_path or not os.path.exists(exec_path):
+        raise RuntimeError("Chromium executable not found after extraction.")
+
+    os.chmod(exec_path, 0o755)
+    click.echo(f"Chromium ready at: {exec_path}")
+
+    return exec_path
+
+
+def find_chromium_executable(chromium_dir):
+    """Locate Chromium binary depending on platform."""
+    system = platform.system().lower()
+    exec_map = {
+        "linux": ["chrome-linux/chrome", "chromium/chrome", "headless_shell"],
+        "darwin": ["chrome-mac/Chromium.app/Contents/MacOS/Chromium"],
+        "windows": ["chrome-win/chrome.exe"],
+    }
+
+    for subpath in exec_map.get(system, []):
+        full_path = os.path.join(chromium_dir, subpath)
+        if os.path.exists(full_path):
+            return full_path
+
+    return None
+
+
+def get_chromium_download_url():
+    """Return platform-appropriate Chromium download URL."""
+    system = platform.system().lower()
+    arch = platform.machine().lower()
+
+    # Default to Chromium 133 (matches Playwright 1.55.0)
+    version = "133.0.6943.35"
+    base = "https://storage.googleapis.com/chrome-for-testing-public"
+
+    if system == "linux" and arch in ["x86_64", "amd64"]:
+        return f"{base}/{version}/linux64/chrome-headless-shell-linux64.zip"
+    elif system == "darwin" and arch == "arm64":
+        return f"{base}/{version}/mac-arm64/chrome-headless-shell-mac-arm64.zip"
+    elif system == "darwin":
+        return f"{base}/{version}/mac-x64/chrome-headless-shell-mac-x64.zip"
+    elif system == "windows":
+        return f"{base}/{version}/win64/chrome-headless-shell-win64.zip"
+    else:
+        raise RuntimeError(f"Unsupported system: {system} {arch}")
