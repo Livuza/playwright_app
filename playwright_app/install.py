@@ -27,16 +27,46 @@ def install_playwright_package():
     subprocess.check_call([sys.executable, "-m", "pip", "install", "--upgrade", "playwright"])
     click.echo("Playwright Python package installed.")
 
-
 def install_system_dependencies():
-    """Install system dependencies via playwright or apt-get."""
+    """Install Playwright system dependencies (Ubuntu 20–24 + Cloud safe)."""
     click.echo("Installing Playwright system dependencies...")
 
-    deps = [
-        "libatk1.0-0", "libatk-bridge2.0-0", "libxkbcommon0",
-        "libatspi2.0-0", "libxcomposite1", "libxdamage1",
-        "libxfixes3", "libxrandr2", "libgbm1", "libasound2", "libx11-xcb1"
+    # Detect Ubuntu version
+    try:
+        os_release = subprocess.check_output(["lsb_release", "-rs"], text=True).strip()
+    except Exception:
+        os_release = "unknown"
+
+    t64 = "24" in os_release or "noble" in os_release.lower()
+
+    # Core dependencies
+    base_deps = [
+        f"libatk1.0-0{'t64' if t64 else ''}",
+        f"libatk-bridge2.0-0{'t64' if t64 else ''}",
+        "libxkbcommon0",
+        f"libatspi2.0-0{'t64' if t64 else ''}",
+        "libxcomposite1",
+        "libxdamage1",
+        "libxfixes3",
+        "libxrandr2",
+        "libgbm1",
+        f"libasound2{'t64' if t64 else ''}",
+        "libx11-xcb1",
     ]
+
+    optional_deps = [
+        f"libevent-2.1-7{'t64' if t64 else ''}",
+        "libgstreamer-plugins-bad1.0-0",
+        "libflite1",
+        "libavif16"
+    ]
+
+    deps = base_deps + optional_deps
+
+    # Detect if on Frappe Cloud (skip sudo installs)
+    if os.environ.get("FRAPPE_CLOUD_SITE") or "frappecloud" in frappe.utils.get_url():
+        click.secho("Detected Frappe Cloud environment. Skipping system-level installs.", fg="yellow")
+        return
 
     # Try playwright install-deps first
     try:
@@ -45,9 +75,8 @@ def install_system_dependencies():
         click.echo("System dependencies installed using playwright install-deps.")
         return
     except (FileNotFoundError, subprocess.CalledProcessError):
-        click.secho("playwright install-deps failed or not available. Falling back to apt-get...", fg="yellow")
+        click.secho("playwright install-deps not found or failed. Falling back to apt-get...", fg="yellow")
 
-    # Fallback: install manually via apt-get
     try:
         click.echo("Installing required libraries via apt-get...")
         subprocess.check_call(["sudo", "apt-get", "update", "-y"])
@@ -55,8 +84,6 @@ def install_system_dependencies():
         click.echo("All required system libraries installed successfully.")
     except subprocess.CalledProcessError as e:
         click.secho(f"apt-get installation failed: {e}", fg="red")
-        raise
-
 
 def get_bench_python_executable():
     """Returns the Python interpreter path from the current bench environment."""
