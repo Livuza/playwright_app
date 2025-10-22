@@ -5,6 +5,7 @@ import click
 import os
 from pathlib import Path
 
+
 def after_install():
     """Main installation hook executed after the app is installed."""
     click.echo("Starting full Playwright + Chromium setup...")
@@ -12,14 +13,13 @@ def after_install():
     try:
         install_playwright_package()
         install_system_dependencies()
-        # Explicitly run playwright install to download browsers
         install_playwright_browsers()
-        # Optionally, run install-deps if permitted
-        install_playwright_deps()
         click.secho("Playwright and browser setup completed successfully!", fg="green", bold=True)
+
     except Exception as e:
         frappe.log_error(title="Playwright Setup Error", message=str(e))
         click.secho(f"Playwright setup failed: {e}", fg="red", bold=True)
+
 
 def install_playwright_package():
     """Install Playwright Python package."""
@@ -29,8 +29,9 @@ def install_playwright_package():
 
 def install_system_dependencies():
     """Install Playwright system dependencies (Ubuntu 20–24 + Cloud safe)."""
-    click.echo("Installing system dependencies...")
+    click.echo("Installing Playwright system dependencies...")
 
+    # Detect Ubuntu version
     try:
         os_release = subprocess.check_output(["lsb_release", "-rs"], text=True).strip()
     except Exception:
@@ -38,6 +39,7 @@ def install_system_dependencies():
 
     t64 = "24" in os_release or "noble" in os_release.lower()
 
+    # Core dependencies
     base_deps = [
         f"libatk1.0-0{'t64' if t64 else ''}",
         f"libatk-bridge2.0-0{'t64' if t64 else ''}",
@@ -61,41 +63,42 @@ def install_system_dependencies():
 
     deps = base_deps + optional_deps
 
+    # Detect if on Frappe Cloud (skip sudo installs)
     if os.environ.get("FRAPPE_CLOUD_SITE") or "frappecloud" in frappe.utils.get_url():
         click.secho("Detected Frappe Cloud environment. Skipping system-level installs.", fg="yellow")
         return
 
+    # Try playwright install-deps first
     try:
-        click.echo("Running: sudo apt-get update and install...")
+        click.echo("Running: sudo playwright install-deps")
+        subprocess.check_call(["sudo", "playwright", "install-deps"])
+        click.echo("System dependencies installed using playwright install-deps.")
+        return
+    except (FileNotFoundError, subprocess.CalledProcessError):
+        click.secho("playwright install-deps not found or failed. Falling back to apt-get...", fg="yellow")
+
+    try:
+        click.echo("Installing required libraries via apt-get...")
         subprocess.check_call(["sudo", "apt-get", "update", "-y"])
         subprocess.check_call(["sudo", "apt-get", "install", "-y"] + deps)
-        click.echo("System dependencies installed.")
+        click.echo("All required system libraries installed successfully.")
     except subprocess.CalledProcessError as e:
-        click.secho(f"apt-get install failed: {e}", fg="red")
+        click.secho(f"apt-get installation failed: {e}", fg="red")
 
 def get_bench_python_executable():
-    """Return the python executable from current bench environment."""
+    """Returns the Python interpreter path from the current bench environment."""
     bench_path = frappe.utils.get_bench_path()
     return Path(bench_path) / "env" / "bin" / "python3"
 
+
 def install_playwright_browsers():
-    """Run playwright install to download browsers."""
+    """Install Chromium, Firefox, and WebKit browsers."""
     bench_python = get_bench_python_executable()
     click.echo("Installing Playwright browsers (Chromium, Firefox, WebKit)...")
+
     try:
         subprocess.check_call([str(bench_python), "-m", "playwright", "install"])
-        click.secho("Playwright browsers installed successfully.", fg="green")
+        click.echo("Playwright browsers installed successfully.")
     except subprocess.CalledProcessError as e:
         click.secho(f"Browser installation failed: {e}", fg="red")
         raise
-
-def install_playwright_deps():
-    """Optionally attempt to run playwright install-deps for system dependencies."""
-    bench_python = get_bench_python_executable()
-    click.echo("Installing system dependencies via playwright install-deps...")
-    try:
-        subprocess.check_call([str(bench_python), "-m", "playwright", "install-deps"])
-        click.secho("Playwright system dependencies installed.", fg="green")
-    except subprocess.CalledProcessError as e:
-        click.secho(f"playwright install-deps failed or not permitted: {e}", fg="yellow")
-        # This can be optional, as environment might restrict this command
